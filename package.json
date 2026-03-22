@@ -1,0 +1,26 @@
+{
+  "name": "ai-code-analyzer",
+  "version": "0.1.0",
+  "description": "GitHub-level AI code detection via commit analysis and git blame correlation",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "analyze": "node dist/analyzer.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "ai-detection",
+    "github",
+    "copilot",
+    "claude",
+    "code-analysis",
+    "git-blame"
+  ],
+  "dependencies": {
+    "@octokit/rest": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.3.0"
+  }
+}
