@@ -1,78 +1,101 @@
 /**
- * GitHub Action runner - executes analysis and saves result
- * This is what runs in the CI environment
+ * Simple GitHub Action analyzer - no dependencies needed
+ * Directly implements AI detection logic
  */
 
 const fs = require('fs');
 const { execSync } = require('child_process');
-const { AICodeAnalyzer } = require('../dist/analyzer');
 
-async function main() {
-  try {
-    const event = JSON.parse(process.env.GITHUB_EVENT || '{}');
-    const analyzer = new AICodeAnalyzer();
+function analyzeChanges(filesChanged, linesAdded, linesDeleted, message) {
+  let aiScore = 0;
+  let humanScore = 0;
+  const signals = [];
 
-    let result;
-
-    // Handle different event types
-    if (event.pull_request) {
-      // PR event
-      const pr = event.pull_request;
-      result = analyzer.analyze(
-        pr.head.sha,
-        pr.user.login,
-        pr.title + '\n' + (pr.body || ''),
-        pr.created_at,
-        pr.changed_files || 0,
-        pr.additions || 0,
-        pr.deletions || 0,
-        Math.floor((new Date(pr.updated_at) - new Date(pr.created_at)) / 1000)
-      );
-    } else if (event.push) {
-      // Push event - get stats from git
-      try {
-        const author = execSync('git log -1 --format=%an', { encoding: 'utf-8' }).trim();
-        const message = execSync('git log -1 --format=%B', { encoding: 'utf-8' }).trim();
-        const hash = execSync('git rev-parse HEAD', { encoding: 'utf-8' }).trim();
-        const timestamp = execSync('git log -1 --format=%aI', { encoding: 'utf-8' }).trim();
-
-        const additions = parseInt(execSync('git diff HEAD~1 HEAD --numstat | awk \'{s+=$1} END {print s}\'', { encoding: 'utf-8' }).trim()) || 0;
-        const deletions = parseInt(execSync('git diff HEAD~1 HEAD --numstat | awk \'{s+=$2} END {print s}\'', { encoding: 'utf-8' }).trim()) || 0;
-        const files = parseInt(execSync('git diff HEAD~1 HEAD --name-only | wc -l', { encoding: 'utf-8' }).trim()) || 1;
-
-        result = analyzer.analyze(
-          hash,
-          author,
-          message,
-          timestamp,
-          files,
-          additions,
-          deletions,
-          30
-        );
-      } catch (e) {
-        console.log('Could not get git stats:', e.message);
-        process.exit(0);
-      }
-    } else {
-      console.log('Unknown event type');
-      process.exit(0);
-    }
-
-    // Save result for GitHub Action to use
-    fs.writeFileSync('/tmp/analysis-result.json', JSON.stringify(result, null, 2));
-
-    // Log result
-    console.log('Analysis complete:');
-    console.log(`Classification: ${result.classification}`);
-    console.log(`AI Confidence: ${(result.aiConfidence * 100).toFixed(1)}%`);
-    console.log(`Human Confidence: ${(result.humanConfidence * 100).toFixed(1)}%`);
-    console.log('\nReasoning:');
-    console.log(result.reasoning);
-  } catch (error) {
-    console.error('Analysis failed:', error);
-    process.exit(1);
+  // Signal 1: Message keywords
+  const msgLower = message.toLowerCase();
+  if (msgLower.includes('claude') || msgLower.includes('copilot') || msgLower.includes('auto-generated')) {
+    aiScore += 3;
+    signals.push(`✓ Commit message contains AI keyword`);
   }
+  if (msgLower.includes('refactor') || msgLower.includes('bugfix')) {
+    humanScore += 2;
+    signals.push(`✓ Commit message contains human keyword`);
+  }
+
+  // Signal 2: Bulk changes
+  if (linesAdded > 500) {
+    aiScore += 2;
+    signals.push(`✓ Large insertion: ${linesAdded} lines`);
+  } else if (linesAdded > 20) {
+    humanScore += 1;
+    signals.push(`✓ Small insertion: ${linesAdded} lines (human-like)`);
+  }
+
+  // Signal 3: File coordination
+  if (filesChanged > 5 && linesAdded > 100) {
+    aiScore += 1.5;
+    signals.push(`✓ ${filesChanged} files changed with ${linesAdded} lines (coordinated)`);
+  }
+
+  // Signal 4: Add/delete ratio
+  const ratio = linesAdded / (linesDeleted || 1);
+  if (ratio > 3) {
+    aiScore += 1;
+    signals.push(`✓ Heavy additions (ratio: ${ratio.toFixed(1)})`);
+  } else if (ratio < 1.5) {
+    humanScore += 1;
+    signals.push(`✓ Balanced changes (ratio: ${ratio.toFixed(1)})`);
+  }
+
+  const total = aiScore + humanScore;
+  const aiConfidence = aiScore / total;
+
+  let classification = 'MIXED';
+  if (aiConfidence > 0.65) {
+    classification = 'AI';
+  } else if (aiConfidence < 0.35) {
+    classification = 'HUMAN';
+  }
+
+  return {
+    classification,
+    aiConfidence,
+    humanConfidence: 1 - aiConfidence,
+    filesChanged,
+    linesAdded,
+    linesDeleted,
+    signals: signals.join('\n'),
+    message
+  };
 }
 
-main();
+try {
+  const author = execSync('git log -1 --format=%an', { encoding: 'utf-8' }).trim();
+  const message = execSync('git log -1 --format=%B', { encoding: 'utf-8' }).trim();
+
+  // Get diff stats
+  let additions = 0, deletions = 0, files = 1;
+  try {
+    const numstat = execSync('git diff HEAD~1 HEAD --numstat', { encoding: 'utf-8' }).split('\n').filter(l => l);
+    additions = numstat.reduce((sum, line) => sum + parseInt(line.split('\t')[0]) || 0, 0);
+    deletions = numstat.reduce((sum, line) => sum + parseInt(line.split('\t')[1]) || 0, 0);
+    files = numstat.length;
+  } catch (e) {
+    // First commit, use HEAD stats
+    const stat = execSync('git log -1 --numstat', { encoding: 'utf-8' }).split('\n').filter(l => l && l.includes('\t'));
+    additions = stat.reduce((sum, line) => sum + parseInt(line.split('\t')[0]) || 0, 0);
+    files = stat.length;
+  }
+
+  const result = analyzeChanges(files, additions, deletions, message);
+
+  fs.writeFileSync('/tmp/analysis-result.json', JSON.stringify(result, null, 2));
+
+  console.log('✅ Analysis complete');
+  console.log(`Classification: ${result.classification}`);
+  console.log(`AI Confidence: ${(result.aiConfidence * 100).toFixed(1)}%`);
+  console.log(`\nSignals:\n${result.signals}`);
+} catch (error) {
+  console.error('❌ Analysis failed:', error.message);
+  process.exit(1);
+}

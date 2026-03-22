@@ -13,55 +13,18 @@ jobs:
     steps:
       - uses: actions/checkout@v3
         with:
-          fetch-depth: 0  # Full history for accurate analysis
+          fetch-depth: 0
 
       - name: Setup Node.js
         uses: actions/setup-node@v3
         with:
           node-version: '18'
 
-      - name: Install dependencies
-        run: npm install
-
-      - name: Build analyzer
-        run: npm run build
-
       - name: Analyze commit
         id: analyze
         run: |
-          node .github/workflows/analyze-commit.js
+          cd .github/workflows
+          node analyze-commit.js
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_EVENT: ${{ toJson(github.event) }}
-
-      - name: Comment on PR
-        if: github.event_name == 'pull_request'
-        uses: actions/github-script@v6
-        with:
-          script: |
-            const fs = require('fs');
-            const result = JSON.parse(fs.readFileSync('/tmp/analysis-result.json', 'utf8'));
-
-            const comment = `## 🤖 AI Code Analysis
-
-**Classification:** ${result.classification.toUpperCase()}
-**AI Confidence:** ${(result.aiConfidence * 100).toFixed(1)}%
-**Human Confidence:** ${(result.humanConfidence * 100).toFixed(1)}%
-
-**Commit Stats:**
-- Files changed: ${result.filesChanged}
-- Lines added: ${result.linesAdded}
-- Lines deleted: ${result.linesDeleted}
-
-**Signals:**
-${result.signals.map(s => `- **${s.name}**: ${s.evidence}`).join('\n')}
-
----
-*AI Code Analyzer • Analyzing commits for AI vs human code*`;
-
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: comment
-            });
